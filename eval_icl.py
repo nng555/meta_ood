@@ -9,6 +9,8 @@ sys.excepthook = custom_excepthook
 
 from utils import *
 # os.environ['HF_HOME'] = "/scratch/nhn234/cache"
+NN_TOKEN = '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'
+QC_TOKEN = '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'
 
 from tqdm import tqdm
 
@@ -49,9 +51,9 @@ def eval_icl(
     test_prompt = "Review: {}\nSentiment:"
 
     model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.float16,
-            token='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').eval()
+            token=QC_TOKEN).eval()
     #model.forward = torch.compile(model.forward, mode="reduce-overhead", fullgraph=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token='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')
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=QC_TOKEN)
     tokenizer.pad_token = tokenizer.eos_token
     print_mem()
 
