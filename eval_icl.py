@@ -8,7 +8,7 @@ def custom_excepthook(exc_type, exc_value, exc_traceback):
 sys.excepthook = custom_excepthook
 
 from utils import *
-os.environ['HF_HOME'] = "/scratch/nhn234/cache"
+# os.environ['HF_HOME'] = "/scratch/nhn234/cache"
 
 from tqdm import tqdm
 
@@ -49,9 +49,9 @@ def eval_icl(
     test_prompt = "Review: {}\nSentiment:"
 
     model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.float16,
-            token='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').eval()
+            token='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').eval()
     #model.forward = torch.compile(model.forward, mode="reduce-overhead", fullgraph=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token='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')
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token='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')
     tokenizer.pad_token = tokenizer.eos_token
     print_mem()
 
