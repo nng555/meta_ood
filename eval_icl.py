@@ -9,6 +9,7 @@ sys.excepthook = custom_excepthook
 
 from utils import *
 # os.environ['HF_HOME'] = "/scratch/nhn234/cache"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 NN_TOKEN = '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'
 QC_TOKEN = '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'
 
@@ -29,16 +30,16 @@ app = typer.Typer()
 
 @app.command()
 def eval_icl(
-    model_name: str='meta-llama/Llama-3.1-8B',
+    model_name: str='meta-llama/Llama-3.2-1B',
     id_dataset: str='stanfordnlp/imdb',
     id_config: str=None,
     id_split: str='train',
     ood_dataset: str='stanfordnlp/sst2',
     ood_config: str = None,
     ood_split: str='train',
-    max_id_icl: int=16,
-    max_ood_icl: int=16,
-    n_ood_test: int=600,
+    max_id_icl: int=8,
+    max_ood_icl: int=8,
+    n_ood_test: int=100,
     nsamples: int=10,
     seed: int=1,
     bsize: int=4,
@@ -99,8 +100,8 @@ def eval_icl(
                     id_idx = int(id_idx)
                     data = id_data[id_idx]
                     label = "Positive" if data['label'] else "Negative"
-                    id_exs.append(id_prompt.format(data['sentence'], label))
-                    #id_exs.append(id_prompt.format(data['text'], label))
+                    # id_exs.append(id_prompt.format(data['sentence'], label))
+                    id_exs.append(id_prompt.format(data['text'], label))
 
                 for ood_idx in ood_idxs:
                     ood_idx = int(ood_idx)
