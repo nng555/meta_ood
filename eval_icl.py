@@ -8,10 +8,15 @@ def custom_excepthook(exc_type, exc_value, exc_traceback):
 sys.excepthook = custom_excepthook
 
 from utils import *
-# os.environ['HF_HOME'] = "/scratch/nhn234/cache"
+
+# set HF cache on NYU cluster
+if os.environ["USER"] == 'nhn234':
+    os.environ['HF_HOME'] = "/scratch/nhn234/cache"
+    HF_TOKEN = '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'
+else:
+    HF_TOKEN = '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'
+
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-NN_TOKEN = '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'
-QC_TOKEN = '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'
 
 from tqdm import tqdm
 
@@ -30,54 +35,60 @@ app = typer.Typer()
 
 @app.command()
 def eval_icl(
-    model_name: str='meta-llama/Llama-3.2-1B',
-    id_dataset: str='stanfordnlp/imdb',
-    id_config: str=None,
-    id_split: str='train',
-    ood_dataset: str='stanfordnlp/sst2',
-    ood_config: str = None,
-    ood_split: str='train',
-    max_id_icl: int=8,
-    max_ood_icl: int=8,
-    n_ood_test: int=100,
+    model_name: str='meta-llama/Llama-3.2-1B-Instruct',
+    src_dataset: str='stanfordnlp/sst2',
+    src_config: str=None,
+    src_split: str='train',
+    src_field: str='sentence',
+    tgt_dataset: str='takala/financial_phrasebank',
+    tgt_config: str = 'sentences_50agree',
+    tgt_split: str='train',
+    tgt_test_split: str='test',
+    tgt_field: str='sentence',
+    max_src_icl: int=16,
+    max_tgt_icl: int=16,
+    n_tgt_test: int=600,
     nsamples: int=10,
     seed: int=1,
     bsize: int=4,
 ):
 
-    out_name = id_dataset.split('/')[-1] + '_' + ood_dataset.split('/')[-1]
+    out_name = src_dataset.split('/')[-1] + '_' + tgt_dataset.split('/')[-1]
 
-    id_prompt = "Review: {}\nSentiment: {}\n\n"
-    ood_prompt = "Review: {}\n\nSentiment:\n\n"
-    test_prompt = "Review: {}\nSentiment:"
+    src_prompt = "Text:\n{}\n\nSentiment:\n{}\n\n"
+    tgt_prompt = "Text:\n{}\n\n"
+    test_prompt = "Text:\n{}"
 
     model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.float16,
-            token=QC_TOKEN).eval()
+            token=HF_TOKEN).eval()
     #model.forward = torch.compile(model.forward, mode="reduce-overhead", fullgraph=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=QC_TOKEN)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
     tokenizer.pad_token = tokenizer.eos_token
     print_mem()
 
-    #tok_choices = tokenizer.convert_tokens_to_ids([" Positive", " Negative"])
-    #tok_choices = [48314, 40695] # negative, positive
-    tok_choices = [51957, 45003]
+    tok_choices = tokenizer.convert_tokens_to_ids(["negative", "positive"])
+    label_map = get_label_map
 
-    id_data = load_dataset(id_dataset, id_config, split=id_split, trust_remote_code=True).shuffle(seed=seed)
-    ood_data = load_dataset(ood_dataset, ood_config, trust_remote_code=True).shuffle(seed=seed)
+    src_data = load_dataset(src_dataset, src_config, split=src_split, trust_remote_code=True).shuffle(seed=seed)
+    tgt_data = load_dataset(tgt_dataset, tgt_config, trust_remote_code=True).shuffle(seed=seed)
+    tgt_data = tgt_data.filter(lambda x: x['label'] not in ['2', 2, 'neutral'])
 
-    if len(ood_data.keys()) == 1:
-        ood_data = ood_data['train'].train_test_split(test_size=0.2)
+    src_label_map = get_label_map(src_data[0]['label'])
+    tgt_label_map = get_label_map(tgt_data[tgt_split][0]['label'])
 
-    max_log_id = int(np.ceil(np.log2(max_id_icl)))
-    max_log_ood = int(np.ceil(np.log2(max_ood_icl)))
+    if len(tgt_data.keys()) == 1:
+        tgt_data = tgt_data[tgt_split].train_test_split(test_size=0.2)
+
+    max_log_id = int(np.ceil(np.log2(max_src_icl)))
+    max_log_ood = int(np.ceil(np.log2(max_tgt_icl)))
 
     res = np.zeros((max_log_id + 2, max_log_ood + 2, nsamples))
     np.random.seed(seed)
 
-    id_exemplars = np.random.choice(len(id_data), size=(nsamples, max_id_icl), replace=False)
-    ood_exemplars = np.random.choice(len(ood_data[ood_split]), size=(nsamples, max_ood_icl), replace=False)
+    src_exemplars = np.random.choice(len(src_data), size=(nsamples, max_src_icl), replace=False)
+    tgt_exemplars = np.random.choice(len(tgt_data[tgt_split]), size=(nsamples, max_tgt_icl), replace=False)
 
-    for n_log_id in list(range(max_log_id + 2))[::-1]: # need at least one ID ICL
+    for n_log_id in list(range(max_log_id + 2)):
         for n_log_ood in range(max_log_ood + 2):
             if n_log_id == 0:
                 n_id = 0
@@ -90,40 +101,51 @@ def eval_icl(
                 n_ood = 2**(n_log_ood - 1)
 
             for i in tqdm(range(nsamples), desc=f"n_id: {n_id}, n_ood: {n_ood}"):
-                id_idxs = id_exemplars[i, :n_id]
-                ood_idxs = ood_exemplars[i, :n_ood]
+                src_idxs = src_exemplars[i, :n_id]
+                tgt_idxs = tgt_exemplars[i, :n_ood]
 
-                id_exs = []
-                ood_exs = []
+                src_exs = []
+                tgt_exs = []
 
-                for id_idx in id_idxs:
-                    id_idx = int(id_idx)
-                    data = id_data[id_idx]
-                    label = "Positive" if data['label'] else "Negative"
-                    # id_exs.append(id_prompt.format(data['sentence'], label))
-                    id_exs.append(id_prompt.format(data['text'], label))
+                for src_idx in src_idxs:
+                    src_idx = int(src_idx)
+                    data = src_data[src_idx]
+                    label = src_label_map[data['label']]
+                    src_exs.append(src_prompt.format(data[src_field], label))
 
-                for ood_idx in ood_idxs:
-                    ood_idx = int(ood_idx)
-                    ood_exs.append(ood_prompt.format(ood_data[ood_split][ood_idx]['sentence']))
+                for tgt_idx in tgt_idxs:
+                    tgt_idx = int(tgt_idx)
+                    tgt_exs.append(tgt_prompt.format(tgt_data[tgt_split][tgt_idx][tgt_field]))
 
-                full_prompt = ''.join(id_exs) + ''.join(ood_exs)
+                full_sys_prompt = OOD_ICL_PROMPT +"### Source Examples\n\n" + ''.join(src_exs) + "### Target Examples\n\n" + ''.join(tgt_exs)
+
+                messages = [
+                    {'role': 'system', 'content': full_sys_prompt},
+                ]
 
                 # start evaluation
                 bid = 0
                 ncorrect = 0
 
-                while bid < n_ood_test:
+                while bid < n_tgt_test:
                     batch = []
                     labels = []
 
-                    while len(batch) < bsize and bid < n_ood_test:
-                        batch.append(full_prompt + test_prompt.format(ood_data['test'][bid]['sentence']))
-                        labels.append(ood_data['test'][bid]['label'])
+                    while len(batch) < bsize and bid < n_tgt_test:
+                        ex = tgt_data[tgt_test_split][bid]
+                        inputs = tokenizer.apply_chat_template(
+                            messages + [
+                                {'role': 'user', 'content': test_prompt.format(ex[tgt_field])},
+                                {'role': 'system', 'content': "Sentiment:\n"}
+                            ],
+                            add_generation_prompt=False,
+                            return_tensors='pt',
+                        ).cuda()
+                        batch.append({'input_ids': inputs[0][:-1]})
+                        labels.append(tgt_label_map[ex['label']])
                         bid += 1
 
-                    batch = tokenizer(batch)
-                    ex_lens = [len(bid) - 1 for bid in batch['input_ids']]
+                    ex_lens = [len(bid['input_ids']) - 1 for bid in batch]
                     batch = DataCollatorWithPadding(tokenizer)(batch)
                     batch = {k: v.cuda() for k, v in batch.items()}
                     out = model(**batch)
@@ -132,7 +154,7 @@ def eval_icl(
                     ncorrect += (preds == labels).sum()
                     del out
 
-                res[n_log_id, n_log_ood, i] = ncorrect / n_ood_test
+                res[n_log_id, n_log_ood, i] = ncorrect / n_tgt_test
 
             print(res.mean(-1))
             print(res.var(-1))
